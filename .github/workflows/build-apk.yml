@@ -1,660 +1,81 @@
-name: Build GuitarMultiFX V6 APK
+name: Build Guitar Multi FX V7 APK
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    paths:
+      - "GuitarMultiFX-V7-Final.zip"
+      - ".github/workflows/build-apk.yml"
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Check V7 ZIP
+        run: |
+          test -f GuitarMultiFX-V7-Final.zip
+          echo "V7 ZIP ditemukan."
+
+      - name: Extract V7 project
+        run: |
+          rm -rf v7_project
+          mkdir -p v7_project
+          unzip -q GuitarMultiFX-V7-Final.zip -d v7_project
+
+          echo "Isi hasil ekstraksi:"
+          find v7_project -maxdepth 3 -type f | head -100
+
+      - name: Locate Android project
+        run: |
+          if [ -f "v7_project/settings.gradle" ] || [ -f "v7_project/settings.gradle.kts" ]; then
+            echo "PROJECT_DIR=v7_project" >> "$GITHUB_ENV"
+          else
+            PROJECT_DIR=$(find v7_project -name settings.gradle -o -name settings.gradle.kts | head -1 | xargs dirname)
+            test -n "$PROJECT_DIR"
+            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.7"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Create Android project
-        shell: bash
+      - name: Install Android SDK packages
         run: |
-          rm -rf app settings.gradle build.gradle gradle.properties
-
-          mkdir -p app/src/main/java/com/strada/guitarmultifx
-
-          cat > settings.gradle <<'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-
-          rootProject.name = "GuitarMultiFX-V6"
-          include ":app"
-          EOF
-
-          cat > build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application' version '8.6.1' apply false
-          }
-          EOF
-
-          cat > gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-          EOF
-
-          cat > app/build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application'
-          }
-
-          android {
-              namespace 'com.strada.guitarmultifx'
-              compileSdk 35
-
-              defaultConfig {
-                  applicationId 'com.strada.guitarmultifx'
-                  minSdk 26
-                  targetSdk 35
-                  versionCode 60
-                  versionName '6.0.1'
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-          }
-          EOF
-
-          cat > app/src/main/AndroidManifest.xml <<'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-              <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-
-              <application
-                  android:theme="@android:style/Theme.Material.NoActionBar"
-                  android:label="Guitar MultiFX V6"
-                  android:allowBackup="false">
-
-                  <activity
-                      android:name=".MainActivity"
-                      android:screenOrientation="landscape"
-                      android:exported="true">
-
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
-          cat > app/src/main/java/com/strada/guitarmultifx/MainActivity.java <<'EOF'
-          package com.strada.guitarmultifx;
-
-          import android.Manifest;
-          import android.app.Activity;
-          import android.content.pm.PackageManager;
-          import android.media.*;
-          import android.os.Bundle;
-          import android.os.Process;
-          import android.graphics.Color;
-          import android.view.Gravity;
-          import android.widget.*;
-
-          public class MainActivity extends Activity {
-
-              static final int SR = 48000;
-              static final int BS = 256;
-              static final int PERMISSION = 7;
-
-              AudioRecord input;
-              AudioTrack output;
-              Thread audioThread;
-
-              volatile boolean running = false;
-              volatile float level = 0;
-              volatile float frequency = 0;
-              volatile String note = "--";
-              volatile float cents = 0;
-
-              short[] loop = new short[SR * 180];
-              int loopLength = 0;
-              int loopPosition = 0;
-              int loopMode = 0;
-
-              TextView status;
-              TextView tuner;
-              TextView preset;
-              ProgressBar meter;
-
-              String[] presets = {
-                  "MG CLEAN",
-                  "CHIME POP",
-                  "FUNK CLEAN",
-                  "BLUES DRIVER",
-                  "TEXAS BLUES",
-                  "CLASSIC ROCK",
-                  "80S ROCK",
-                  "METAL RHYTHM",
-                  "MODERN METAL",
-                  "METAL LEAD",
-                  "AMBIENT",
-                  "SOLO BOOST"
-              };
-
-              int drive = 0;
-
-              TextView text(String s, int size) {
-                  TextView t = new TextView(this);
-                  t.setText(s);
-                  t.setTextSize(size);
-                  t.setTextColor(Color.WHITE);
-                  t.setGravity(Gravity.CENTER);
-                  return t;
-              }
-
-              Button button(String s) {
-                  Button b = new Button(this);
-                  b.setText(s);
-                  b.setAllCaps(false);
-                  return b;
-              }
-
-              @Override
-              protected void onCreate(Bundle b) {
-                  super.onCreate(b);
-                  buildUI();
-              }
-
-              void buildUI() {
-
-                  LinearLayout root = new LinearLayout(this);
-                  root.setOrientation(LinearLayout.VERTICAL);
-                  root.setPadding(10, 5, 10, 5);
-                  root.setBackgroundColor(Color.rgb(10,10,12));
-
-                  LinearLayout top = new LinearLayout(this);
-                  top.setGravity(Gravity.CENTER_VERTICAL);
-
-                  preset = text("MG CLEAN",21);
-                  top.addView(preset,new LinearLayout.LayoutParams(0,60,1));
-
-                  status = text("STOPPED",14);
-                  top.addView(status,new LinearLayout.LayoutParams(120,60));
-
-                  Button start = button("START AUDIO");
-                  Button stop = button("STOP");
-
-                  top.addView(start,new LinearLayout.LayoutParams(145,60));
-                  top.addView(stop,new LinearLayout.LayoutParams(90,60));
-
-                  root.addView(top);
-
-                  LinearLayout info = new LinearLayout(this);
-
-                  tuner = text("TUNER --",23);
-                  info.addView(tuner,new LinearLayout.LayoutParams(0,70,1));
-
-                  meter = new ProgressBar(
-                      this,
-                      null,
-                      android.R.attr.progressBarStyleHorizontal
-                  );
-
-                  meter.setMax(100);
-
-                  info.addView(
-                      meter,
-                      new LinearLayout.LayoutParams(0,30,1)
-                  );
-
-                  root.addView(info);
-
-                  LinearLayout presetRow = new LinearLayout(this);
-
-                  for(int i=0;i<presets.length;i++) {
-
-                      final int n=i;
-
-                      Button b=button((i+1)+" "+presets[i]);
-
-                      b.setOnClickListener(v -> {
-
-                          preset.setText(presets[n]);
-
-                          if(n>=9) drive=7;
-                          else if(n>=7) drive=5;
-                          else if(n>=5) drive=2;
-                          else if(n>=3) drive=1;
-                          else drive=0;
-
-                      });
-
-                      presetRow.addView(
-                          b,
-                          new LinearLayout.LayoutParams(180,65)
-                      );
-                  }
-
-                  HorizontalScrollView presetScroll =
-                      new HorizontalScrollView(this);
-
-                  presetScroll.addView(presetRow);
-
-                  root.addView(
-                      presetScroll,
-                      new LinearLayout.LayoutParams(-1,75)
-                  );
-
-                  LinearLayout looper = new LinearLayout(this);
-
-                  Button rec=button("LOOP REC");
-                  Button play=button("PLAY");
-                  Button dub=button("DUB");
-                  Button clear=button("CLEAR");
-
-                  looper.addView(rec);
-                  looper.addView(play);
-                  looper.addView(dub);
-                  looper.addView(clear);
-
-                  root.addView(
-                      looper,
-                      new LinearLayout.LayoutParams(-1,70)
-                  );
-
-                  rec.setOnClickListener(v -> {
-                      loopMode=1;
-                      loopPosition=0;
-                      loopLength=0;
-                      status.setText("LOOP REC");
-                  });
-
-                  play.setOnClickListener(v -> {
-                      if(loopLength>0) {
-                          loopMode=2;
-                          loopPosition=0;
-                          status.setText("LOOP PLAY");
-                      }
-                  });
-
-                  dub.setOnClickListener(v -> {
-                      if(loopLength>0) {
-                          loopMode=3;
-                          loopPosition=0;
-                          status.setText("LOOP DUB");
-                      }
-                  });
-
-                  clear.setOnClickListener(v -> {
-                      loopMode=0;
-                      loopLength=0;
-                      loopPosition=0;
-                      status.setText("LOOP CLEAR");
-                  });
-
-                  start.setOnClickListener(v -> {
-
-                      if(checkSelfPermission(
-                          Manifest.permission.RECORD_AUDIO
-                      ) != PackageManager.PERMISSION_GRANTED) {
-
-                          requestPermissions(
-                              new String[]{
-                                  Manifest.permission.RECORD_AUDIO
-                              },
-                              PERMISSION
-                          );
-
-                      } else {
-                          startAudio();
-                      }
-                  });
-
-                  stop.setOnClickListener(v -> {
-                      stopAudio();
-                      status.setText("STOPPED");
-                  });
-
-                  setContentView(root);
-
-                  new Thread(() -> {
-
-                      while(!isFinishing()) {
-
-                          runOnUiThread(() -> {
-
-                              meter.setProgress(
-                                  Math.min(100,(int)(level*100))
-                              );
-
-                              if(frequency>0) {
-
-                                  tuner.setText(
-                                      "TUNER  "+note+
-                                      "  "+
-                                      (cents>=0?"+":"")+
-                                      ((int)cents)+"c"
-                                  );
-
-                              } else {
-                                  tuner.setText("TUNER --");
-                              }
-
-                          });
-
-                          try {
-                              Thread.sleep(100);
-                          } catch(Exception e) {}
-                      }
-
-                  }).start();
-              }
-
-              void startAudio() {
-
-                  if(running) return;
-
-                  int inputSize =
-                      AudioRecord.getMinBufferSize(
-                          SR,
-                          AudioFormat.CHANNEL_IN_MONO,
-                          AudioFormat.ENCODING_PCM_16BIT
-                      );
-
-                  int outputSize =
-                      AudioTrack.getMinBufferSize(
-                          SR,
-                          AudioFormat.CHANNEL_OUT_MONO,
-                          AudioFormat.ENCODING_PCM_16BIT
-                      );
-
-                  try {
-
-                      input = new AudioRecord(
-                          MediaRecorder.AudioSource.DEFAULT,
-                          SR,
-                          AudioFormat.CHANNEL_IN_MONO,
-                          AudioFormat.ENCODING_PCM_16BIT,
-                          Math.max(inputSize,BS*8)
-                      );
-
-                      output = new AudioTrack(
-                          new AudioAttributes.Builder()
-                              .setUsage(AudioAttributes.USAGE_MEDIA)
-                              .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                              .build(),
-
-                          new AudioFormat.Builder()
-                              .setSampleRate(SR)
-                              .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                              .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                              .build(),
-
-                          Math.max(outputSize,BS*8),
-                          AudioTrack.MODE_STREAM,
-                          AudioManager.AUDIO_SESSION_ID_GENERATE
-                      );
-
-                      input.startRecording();
-                      output.play();
-
-                      running=true;
-                      status.setText("AUDIO RUNNING");
-
-                      audioThread=new Thread(this::audioLoop);
-                      audioThread.start();
-
-                  } catch(Exception e) {
-
-                      status.setText("AUDIO ERROR");
-                      stopAudio();
-                  }
-              }
-
-              void audioLoop() {
-
-                  Process.setThreadPriority(
-                      Process.THREAD_PRIORITY_AUDIO
-                  );
-
-                  short[] in=new short[BS];
-                  short[] out=new short[BS];
-
-                  while(running) {
-
-                      int n=input.read(in,0,BS);
-
-                      if(n<=0) continue;
-
-                      int peak=0;
-
-                      for(int i=0;i<n;i++)
-                          peak=Math.max(peak,Math.abs(in[i]));
-
-                      level=peak/32767f;
-
-                      detectPitch(in,n);
-
-                      for(int i=0;i<n;i++) {
-
-                          float x=in[i]/32768f;
-
-                          if(drive>0)
-                              x=(float)Math.tanh(
-                                  x*(1+drive*3.0)
-                              );
-
-                          if(drive>=5 &&
-                             Math.abs(x)<0.012)
-                              x=0;
-
-                          x=Math.max(-1,
-                              Math.min(1,x));
-
-                          out[i]=(short)(x*32767);
-                      }
-
-                      if(loopMode==1) {
-
-                          for(int i=0;i<n;i++) {
-
-                              if(loopPosition>=loop.length) {
-
-                                  loopMode=2;
-                                  loopPosition=0;
-                                  break;
-                              }
-
-                              loop[loopPosition++]=out[i];
-                              loopLength=loopPosition;
-                          }
-
-                      } else if(loopMode==2 &&
-                                loopLength>0) {
-
-                          for(int i=0;i<n;i++) {
-
-                              int j=loopPosition++%loopLength;
-
-                              out[i]=(short)(
-                                  out[i]/2+
-                                  loop[j]/2
-                              );
-                          }
-
-                      } else if(loopMode==3 &&
-                                loopLength>0) {
-
-                          for(int i=0;i<n;i++) {
-
-                              int j=loopPosition++%loopLength;
-
-                              short mix=(short)(
-                                  out[i]/2+
-                                  loop[j]/2
-                              );
-
-                              out[i]=mix;
-                              loop[j]=mix;
-                          }
-                      }
-
-                      output.write(
-                          out,
-                          0,
-                          n,
-                          AudioTrack.WRITE_BLOCKING
-                      );
-                  }
-              }
-
-              void detectPitch(short[] a,int n) {
-
-                  if(n<128) return;
-
-                  double energy=0;
-
-                  for(int i=0;i<n;i++) {
-
-                      double x=a[i]/32768.0;
-                      energy+=x*x;
-                  }
-
-                  if(Math.sqrt(energy/n)<0.01) {
-
-                      frequency=0;
-                      return;
-                  }
-
-                  int bestLag=0;
-                  double best=0;
-
-                  for(int lag=48;
-                      lag<=Math.min(680,n-2);
-                      lag++) {
-
-                      double c=0;
-
-                      for(int i=0;i<n-lag;i++)
-                          c+=(double)a[i]*a[i+lag];
-
-                      if(c>best) {
-                          best=c;
-                          bestLag=lag;
-                      }
-                  }
-
-                  if(bestLag==0) return;
-
-                  frequency=SR/(float)bestLag;
-
-                  int midi=(int)Math.round(
-                      69+
-                      12*Math.log(frequency/440)
-                      /Math.log(2)
-                  );
-
-                  double target=
-                      440*Math.pow(
-                          2,
-                          (midi-69)/12.0
-                      );
-
-                  cents=(float)(
-                      1200*
-                      Math.log(frequency/target)
-                      /Math.log(2)
-                  );
-
-                  String[] names={
-                      "C","C#","D","D#","E","F",
-                      "F#","G","G#","A","A#","B"
-                  };
-
-                  note=
-                      names[(midi%12+12)%12]+
-                      (midi/12-1);
-              }
-
-              void stopAudio() {
-
-                  running=false;
-
-                  try {
-                      if(input!=null) input.stop();
-                  } catch(Exception e){}
-
-                  try {
-                      if(output!=null) output.pause();
-                  } catch(Exception e){}
-
-                  try {
-                      if(output!=null) output.flush();
-                  } catch(Exception e){}
-
-                  if(input!=null) input.release();
-                  if(output!=null) output.release();
-
-                  input=null;
-                  output=null;
-              }
-
-              @Override
-              protected void onDestroy() {
-
-                  stopAudio();
-                  super.onDestroy();
-              }
-
-              @Override
-              public void onRequestPermissionsResult(
-                  int requestCode,
-                  String[] permissions,
-                  int[] results) {
-
-                  super.onRequestPermissionsResult(
-                      requestCode,
-                      permissions,
-                      results
-                  );
-
-                  if(requestCode==PERMISSION &&
-                     results.length>0 &&
-                     results[0]==PackageManager.PERMISSION_GRANTED) {
-
-                      startAudio();
-                  }
-              }
-          }
-          EOF
+          sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Make Gradle executable
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+          else
+            echo "gradlew tidak ditemukan."
+            exit 1
+          fi
 
       - name: Build APK
-        run: gradle :app:assembleDebug --stacktrace
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          ./gradlew assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Find APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          find . -type f -name "*.apk" -print
+
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GuitarMultiFX-V6-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: GuitarMultiFX-V7-APK
+          path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
           if-no-files-found: error
