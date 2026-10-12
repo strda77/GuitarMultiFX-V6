@@ -1,4 +1,5 @@
-name: Build Guitar Multi FX V7 APK
+
+name: GuitarMultiFX V7 Build
 
 on:
   workflow_dispatch:
@@ -12,68 +13,96 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check V7 ZIP
+      - name: Check and Extract ZIP
         run: |
+          set -e
           test -f GuitarMultiFX-V7-Final.zip
-          echo "V7 ZIP ditemukan."
-
-      - name: Extract V7 project
-        run: |
-          rm -rf v7_project
-          mkdir -p v7_project
+          unzip -t GuitarMultiFX-V7-Final.zip
+          mkdir v7_project
           unzip -q GuitarMultiFX-V7-Final.zip -d v7_project
 
-          echo "Isi hasil ekstraksi:"
-          find v7_project -maxdepth 3 -type f | head -100
+          echo "=== FILE DALAM ZIP ==="
+          find v7_project -maxdepth 6 -type f | sort | head -300
 
-      - name: Locate Android project
+          echo "=== GRADLE FILES ==="
+          find v7_project -type f \( \
+            -name settings.gradle \
+            -o -name settings.gradle.kts \
+            -o -name build.gradle \
+            -o -name build.gradle.kts \
+            -o -name gradlew \
+          \) -print
+
+      - name: Find Android Project
+        shell: bash
         run: |
-          if [ -f "v7_project/settings.gradle" ] || [ -f "v7_project/settings.gradle.kts" ]; then
-            echo "PROJECT_DIR=v7_project" >> "$GITHUB_ENV"
-          else
-            PROJECT_DIR=$(find v7_project -name settings.gradle -o -name settings.gradle.kts | head -1 | xargs dirname)
-            test -n "$PROJECT_DIR"
-            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          set -e
+          FILE=$(find "$GITHUB_WORKSPACE/v7_project" \
+            -type f \( -name settings.gradle \
+            -o -name settings.gradle.kts \) \
+            -print -quit)
+
+          if [ -z "$FILE" ]; then
+            echo "ERROR: Konfigurasi proyek Gradle tidak ditemukan."
+            exit 1
           fi
 
-      - name: Set up JDK 17
+          echo "PROJECT_DIR=$(dirname "$FILE")" >> "$GITHUB_ENV"
+
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
+      - name: Locate Android SDK
+        shell: bash
         run: |
-          sdkmanager --licenses > /dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          set -e
+          SDKMANAGER="$(command -v sdkmanager || true)"
 
-      - name: Make Gradle executable
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-          else
-            echo "gradlew tidak ditemukan."
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find /usr/local/lib/android/sdk/cmdline-tools \
+              -type f -name sdkmanager -print -quit 2>/dev/null || true)"
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager tidak ditemukan."
             exit 1
           fi
 
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "SDK manager: $SDKMANAGER"
+          "$SDKMANAGER" --version
+
+      - name: Install Android SDK
+        run: |
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Check Gradle Wrapper
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ ! -f gradlew ]; then
+            echo "ERROR: File gradlew tidak ditemukan."
+            ls -la
+            exit 1
+          fi
+
+          chmod +x gradlew
+          ./gradlew --version
+
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace
 
-      - name: Find APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          find . -type f -name "*.apk" -print
-
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: GuitarMultiFX-V7-APK
